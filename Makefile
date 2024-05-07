@@ -9,6 +9,7 @@ test_compiler_flags = -lpthread -lncurses -lcriterion -o $(bin_path)/$(test_targ
 
 
 build:
+	@ mkdir -p bin
 	@ cc main.c $(source_files) $(compiler_flags)
 
 test:
