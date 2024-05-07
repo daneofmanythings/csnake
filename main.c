@@ -26,9 +26,8 @@ bool point_is_equal(const Point *left, const Point *right) {
   return left->y == right->y && left->x == right->x;
 }
 
-bool point_is_point_collide_with_collection(const Point *collection,
-                                            int collection_size,
-                                            const Point *p) {
+bool point_collides_with_collection(const Point *collection,
+                                    int collection_size, const Point *p) {
   for (int i = 0; i < collection_size; ++i) {
     if (point_is_equal(&collection[i], p)) {
       return true;
@@ -121,8 +120,8 @@ typedef struct {
 } GameData;
 
 void gamedata_new_apple(GameData *gd) {
-  while (point_is_point_collide_with_collection(gd->snek->body, gd->snek->size,
-                                                &gd->apple)) {
+  while (point_collides_with_collection(gd->snek->body, gd->snek->size,
+                                        &gd->apple)) {
     gd->apple.y = rand_bounded_int(gd->y_start + 2, gd->y_end - 1);
     gd->apple.x = rand_bounded_int(gd->x_start + 1, gd->x_end - 1);
   }
@@ -182,35 +181,25 @@ void gamedata_draw_box_to_window(GameData *gd, WINDOW *scr) {
   }
 }
 
-void update_gamestate(GameData *gd, const char *ch) {
+void update_gamestate(GameData *gd, const char *ch, WINDOW *scr) {
   // determine the direction
   gamedata_set_new_direction(gd, ch);
   snek_move_in_direction(gd->snek, &gd->current_dir);
 
   // check snek positional data
-  // 1. hit itself
-  if (snek_collides_with_itself(gd->snek)) {
-    char *exit_msg = "snake hit itself. you lose.";
+  // 1. hit itself or border
+  if (snek_collides_with_itself(gd->snek) || gamedata_is_snek_at_border(gd)) {
+    char *exit_msg = "GAME OVER";
     int y = (gd->y_end + gd->y_start) / 2;
     int x = (gd->x_end + gd->x_start) / 2 - strlen(exit_msg) / 2;
     mvprintw(y, x, "%s", exit_msg);
     getch();
+    delwin(scr);
     endwin();
     exit(0);
   }
 
-  // 2. hit boundary
-  if (gamedata_is_snek_at_border(gd)) {
-    char *exit_msg = "snake is out of bounds. you lose.";
-    int y = (gd->y_end + gd->y_start) / 2;
-    int x = (gd->x_end + gd->x_start) / 2 - strlen(exit_msg) / 2;
-    mvprintw(y, x, "%s", exit_msg);
-    getch();
-    endwin();
-    exit(0);
-  }
-
-  // 3. hit apple
+  // 2. hit apple
   // a. increase snek length (snek_add_point)
   if (point_is_equal(&gd->snek->body[0], &gd->apple)) {
     snek_add_point(gd->snek, gd->apple);
@@ -241,8 +230,8 @@ void *threaded_run_game(void *arg) {
   ThreadArgs *args = (ThreadArgs *)arg;
 
   while (true) {
-    napms(50);
-    update_gamestate(args->gd, args->ch);
+    napms(60);
+    update_gamestate(args->gd, args->ch, args->scr);
     draw_gamestate(args->gd, args->scr);
   }
   return NULL;
@@ -279,7 +268,7 @@ int main(void) {
       .current_dir = RIGHT,
   };
 
-  // This variable is const referenced by the gamethread
+  // This variable is const referenced by the game_thread
   char ch;
 
   ThreadArgs ta = {
