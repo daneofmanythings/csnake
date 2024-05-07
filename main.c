@@ -5,15 +5,13 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "gamedata.h"
+
+#define MS_PER_FRAME 35
 #define SNEK_CAPACITY 100
 #define SNEK_START_SIZE 5
 #define SNEK_CHAR ' '
 #define APPLE_CHAR '@'
-
-int rand_bounded_int(int min, int max) {
-  srand(time(0));
-  return (rand() % max - min + 1) + min;
-}
 
 typedef struct {
   int y;
@@ -122,7 +120,7 @@ typedef struct {
 void gamedata_new_apple(GameData *gd) {
   while (point_collides_with_collection(gd->snek->body, gd->snek->size,
                                         &gd->apple)) {
-    gd->apple.y = rand_bounded_int(gd->y_start + 2, gd->y_end - 1);
+    gd->apple.y = rand_bounded_int(gd->y_start + 1, gd->y_end - 1);
     gd->apple.x = rand_bounded_int(gd->x_start + 1, gd->x_end - 1);
   }
 }
@@ -211,7 +209,8 @@ void update_gamestate(GameData *gd, const char *ch, WINDOW *scr) {
 void draw_gamestate(GameData *gd, WINDOW *scr) {
   werase(scr);
   static char *header = "SCORE: %d";
-  wprintw(scr, header, gd->snek->size - SNEK_START_SIZE);
+  wprintw(scr, header, gd->snek->size - SNEK_START_SIZE, gd->apple.y,
+          gd->apple.x);
 
   gamedata_draw_box_to_window(gd, scr);
   snek_draw(gd->snek, stdscr);
@@ -230,7 +229,11 @@ void *threaded_run_game(void *arg) {
   ThreadArgs *args = (ThreadArgs *)arg;
 
   while (true) {
-    napms(60);
+    if (args->gd->current_dir == UP || args->gd->current_dir == DOWN) {
+      napms(MS_PER_FRAME * 2);
+    } else {
+      napms(MS_PER_FRAME);
+    }
     update_gamestate(args->gd, args->ch, args->scr);
     draw_gamestate(args->gd, args->scr);
   }
@@ -256,17 +259,19 @@ int main(void) {
   int rows, cols, height, width, y_start, x_start;
   getmaxyx(stdscr, rows, cols);
   y_start = 1;
+  int y_end = rows - 2 * y_start;
   x_start = 1;
-  Point apple = {3, 3};
+  int x_end = cols - 2 * x_start;
   GameData gd = {
-      .apple = apple,
+      .apple = {rand_bounded_int(3, y_end), rand_bounded_int(3, x_end)},
       .snek = &s,
       .y_start = y_start,
-      .y_end = rows - 2 * y_start,
+      .y_end = y_end,
       .x_start = x_start,
-      .x_end = cols - 2 * x_start,
+      .x_end = x_end,
       .current_dir = RIGHT,
   };
+  // gamedata_new_apple(&gd);
 
   // This variable is const referenced by the game_thread
   char ch;
