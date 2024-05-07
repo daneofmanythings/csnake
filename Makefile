@@ -1,6 +1,6 @@
 bin_path = ./bin
 target_name = snek
-compiler_flags = -lncurses -o $(bin_path)/snek
+compiler_flags = -lpthread -lncurses -o $(bin_path)/snek
 
 
 build:

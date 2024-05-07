@@ -1,24 +1,16 @@
 #include <ncurses.h>
+#include <pthread.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 #define SNEK_CAPACITY 100
+#define SNEK_START_SIZE 5
 #define SNEK_CHAR ' '
 #define APPLE_CHAR '@'
 
-// ACS_ULCORNER	/* upper left corner */
-// ACS_LLCORNER	/* lower left corner */
-// ACS_URCORNER	/* upper right corner */
-// ACS_LRCORNER	/* lower right corner */
-// ACS_LTEE	/* tee pointing right */
-// ACS_RTEE	/* tee pointing left */
-// ACS_BTEE	/* tee pointing up */
-// ACS_TTEE	/* tee pointing down */
-// ACS_HLINE /* horizontal line */
-// ACS_VLINE /* vertical line */
-
 int rand_bounded_int(int min, int max) {
-  // WARN: this isn't random i don't think
   srand(time(0));
   return (rand() % max - min + 1) + min;
 }
@@ -28,8 +20,21 @@ typedef struct {
   int x;
 } Point;
 
+enum Dir { UP, DOWN, LEFT, RIGHT };
+
 bool point_is_equal(const Point *left, const Point *right) {
   return left->y == right->y && left->x == right->x;
+}
+
+bool point_is_point_collide_with_collection(const Point *collection,
+                                            int collection_size,
+                                            const Point *p) {
+  for (int i = 0; i < collection_size; ++i) {
+    if (point_is_equal(&collection[i], p)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 typedef struct {
@@ -46,8 +51,16 @@ void snek_add_point(Snek *s, Point p) {
   s->size += 1;
 }
 
-void snek_draw(const Snek *s, WINDOW *scr) {
+bool snek_collides_with_itself(Snek *s) {
+  for (int i = 1; i < s->size; ++i) {
+    if (point_is_equal(&s->body[i], &s->body[0])) {
+      return true;
+    }
+  }
+  return false;
+}
 
+void snek_draw(const Snek *s, WINDOW *scr) {
   attron(A_REVERSE);
   for (int i = 0; i < s->size; ++i) {
     mvwaddch(scr, s->body[i].y, s->body[i].x, SNEK_CHAR);
@@ -81,34 +94,79 @@ void snek_move_right(Snek *s) {
   snek_move(s, next, 0);
 }
 
+void snek_move_in_direction(Snek *s, enum Dir *dir) {
+  switch (*dir) {
+  case UP:
+    snek_move_up(s);
+    break;
+  case DOWN:
+    snek_move_down(s);
+    break;
+  case LEFT:
+    snek_move_left(s);
+    break;
+  case RIGHT:
+    snek_move_right(s);
+    break;
+  }
+}
 typedef struct {
   Point apple;
-  Point snek_head; // TODO: update to whole body.
+  Snek *snek;
   int y_start;
   int y_end;
   int x_start;
   int x_end;
-  int refresh_per_second;
+  enum Dir current_dir;
 } GameData;
 
 void gamedata_new_apple(GameData *gd) {
-  while (point_is_equal(&gd->snek_head, &gd->apple)) {
-    gd->apple.y = rand_bounded_int(gd->y_start, gd->y_end);
-    gd->apple.x = rand_bounded_int(gd->x_start, gd->x_end);
+  while (point_is_point_collide_with_collection(gd->snek->body, gd->snek->size,
+                                                &gd->apple)) {
+    gd->apple.y = rand_bounded_int(gd->y_start + 2, gd->y_end - 1);
+    gd->apple.x = rand_bounded_int(gd->x_start + 1, gd->x_end - 1);
+  }
+}
+
+bool gamedata_is_snek_at_border(GameData *gd) {
+  return gd->x_start == gd->snek->body[0].x ||
+         gd->x_end == gd->snek->body[0].x ||
+         gd->y_start == gd->snek->body[0].y || gd->y_end == gd->snek->body[0].y;
+}
+
+void gamedata_set_new_direction(GameData *gd, const char *ch) {
+  enum Dir new_dir;
+  switch (*ch) {
+  case 'w':
+    new_dir = UP;
+    if (gd->current_dir != DOWN) {
+      gd->current_dir = UP;
+    }
+    break;
+  case 's':
+    new_dir = DOWN;
+    if (gd->current_dir != UP) {
+      gd->current_dir = DOWN;
+    }
+    break;
+  case 'a':
+    new_dir = LEFT;
+    if (gd->current_dir != RIGHT) {
+      gd->current_dir = LEFT;
+    }
+    break;
+  case 'd':
+    new_dir = RIGHT;
+    if (gd->current_dir != LEFT) {
+      gd->current_dir = RIGHT;
+    }
+    break;
+  default:
+    break;
   }
 }
 
 void gamedata_draw_box_to_window(GameData *gd, WINDOW *scr) {
-  // ACS_ULCORNER	/* upper left corner */
-  // ACS_LLCORNER	/* lower left corner */
-  // ACS_URCORNER	/* upper right corner */
-  // ACS_LRCORNER	/* lower right corner */
-  // ACS_LTEE	/* tee pointing right */
-  // ACS_RTEE	/* tee pointing left */
-  // ACS_BTEE	/* tee pointing up */
-  // ACS_TTEE	/* tee pointing down */
-  // ACS_HLINE /* horizontal line */
-  // ACS_VLINE /* vertical line */
   mvwaddch(scr, gd->y_start, gd->x_start, ACS_ULCORNER);
   mvwaddch(scr, gd->y_start, gd->x_end, ACS_URCORNER);
   mvwaddch(scr, gd->y_end, gd->x_start, ACS_LLCORNER);
@@ -124,26 +182,70 @@ void gamedata_draw_box_to_window(GameData *gd, WINDOW *scr) {
   }
 }
 
-void update_gamestate(GameData *gd, Snek *s) {
-  // update snek positional data // TODO: update to whole body.
-  gd->snek_head = s->body[0];
+void update_gamestate(GameData *gd, const char *ch) {
+  // determine the direction
+  gamedata_set_new_direction(gd, ch);
+  snek_move_in_direction(gd->snek, &gd->current_dir);
 
   // check snek positional data
   // 1. hit itself
-  // a. lose game. TODO:
+  if (snek_collides_with_itself(gd->snek)) {
+    char *exit_msg = "snake hit itself. you lose.";
+    int y = (gd->y_end + gd->y_start) / 2;
+    int x = (gd->x_end + gd->x_start) / 2 - strlen(exit_msg) / 2;
+    mvprintw(y, x, "%s", exit_msg);
+    getch();
+    endwin();
+    exit(0);
+  }
 
   // 2. hit boundary
-  // a. lose game TODO:
+  if (gamedata_is_snek_at_border(gd)) {
+    char *exit_msg = "snake is out of bounds. you lose.";
+    int y = (gd->y_end + gd->y_start) / 2;
+    int x = (gd->x_end + gd->x_start) / 2 - strlen(exit_msg) / 2;
+    mvprintw(y, x, "%s", exit_msg);
+    getch();
+    endwin();
+    exit(0);
+  }
 
   // 3. hit apple
   // a. increase snek length (snek_add_point)
-  if (point_is_equal(
-          &gd->snek_head,
-          &gd->apple)) { // TODO: update logic when whole body is implemented.
-    snek_add_point(s, gd->apple);
+  if (point_is_equal(&gd->snek->body[0], &gd->apple)) {
+    snek_add_point(gd->snek, gd->apple);
   }
   // b. generate random apple pos and update
   gamedata_new_apple(gd);
+}
+
+void draw_gamestate(GameData *gd, WINDOW *scr) {
+  werase(scr);
+  static char *header = "SCORE: %d";
+  wprintw(scr, header, gd->snek->size - SNEK_START_SIZE);
+
+  gamedata_draw_box_to_window(gd, scr);
+  snek_draw(gd->snek, stdscr);
+  mvwaddch(stdscr, gd->apple.y, gd->apple.x, APPLE_CHAR | A_BOLD);
+
+  wrefresh(scr);
+}
+
+typedef struct {
+  GameData *gd;
+  const char *ch;
+  WINDOW *scr;
+} ThreadArgs;
+
+void *threaded_run_game(void *arg) {
+  ThreadArgs *args = (ThreadArgs *)arg;
+
+  while (true) {
+    napms(50);
+    update_gamestate(args->gd, args->ch);
+    draw_gamestate(args->gd, args->scr);
+  }
+  return NULL;
 }
 
 int main(void) {
@@ -153,66 +255,45 @@ int main(void) {
   cbreak();
   keypad(stdscr, true);
 
+  // setting up the snek
   Point body[SNEK_CAPACITY];
-  Point p0 = {2, 2};
-  Point apple = {3, 3};
-  int rows, cols, height, width, starty, startx;
-  getmaxyx(stdscr, rows, cols);
-
-  starty = 1;
-  startx = 1;
-  height = rows - starty;
-  width = cols - startx;
-
+  Point snek_starting_pos = {2, 2};
   Snek s = {.body = body, .capacity = SNEK_CAPACITY, .size = 0};
-  GameData gd = {.apple = apple,
-                 .snek_head = s.body[0],
-                 .y_start = starty,
-                 .y_end = height - starty,
-                 .x_start = startx,
-                 .x_end = width - startx,
-                 .refresh_per_second = 1};
-  for (int i = 0; i < 5; ++i) {
-    snek_add_point(&s, p0);
+  for (int i = 0; i < SNEK_START_SIZE; ++i) {
+    snek_add_point(&s, snek_starting_pos);
   }
 
+  // setting up the gamedata
+  int rows, cols, height, width, y_start, x_start;
+  getmaxyx(stdscr, rows, cols);
+  y_start = 1;
+  x_start = 1;
+  Point apple = {3, 3};
+  GameData gd = {
+      .apple = apple,
+      .snek = &s,
+      .y_start = y_start,
+      .y_end = rows - 2 * y_start,
+      .x_start = x_start,
+      .x_end = cols - 2 * x_start,
+      .current_dir = RIGHT,
+  };
+
+  // This variable is const referenced by the gamethread
   char ch;
 
+  ThreadArgs ta = {
+      .gd = &gd,
+      .ch = &ch,
+      .scr = stdscr,
+  };
+
+  pthread_t game_thread;
+  pthread_create(&game_thread, NULL, threaded_run_game, (void *)&ta);
+
   while (true) {
-    update_gamestate(&gd, &s);
-
-    werase(stdscr);
-
-    char *header =
-        "rows, cols, (%d, %d), apple: {%d, %d}, y_end, x_end: [%d, %d]";
-    printw(header, rows, cols, gd.apple.y, gd.apple.x, gd.y_end, gd.x_end);
-    gamedata_draw_box_to_window(&gd, stdscr);
-    snek_draw(&s, stdscr);
-    mvwaddch(stdscr, gd.apple.y, gd.apple.x, APPLE_CHAR);
-
-    wrefresh(stdscr);
-
     ch = getch();
-    switch (ch) {
-    case 'w':
-      snek_move_up(&s);
-      break;
-    case 's':
-      snek_move_down(&s);
-      break;
-    case 'a':
-      snek_move_left(&s);
-      break;
-    case 'd':
-      snek_move_right(&s);
-      break;
-    case 27: // ASCII Escape code
-      goto CLEANUP;
-    default:
-      continue;
-    }
   }
 
-CLEANUP:
   endwin();
 }
